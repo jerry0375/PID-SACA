@@ -1,0 +1,57 @@
+class Config:
+    def __init__(self):
+        # 业务场景参数（论文Section V）
+        # self.departure_station = np.array([104.444731, 30.323036])  # 成都天府国际机场经纬度
+        self.departure_station = np.array([104.06, 30.67])  # 成都火车东站经纬度
+        self.num_destinations = 30  # 论文中聚类得到的30个目的地
+        self.bus_capacity = 80  # 公交容量（论文Section V.B）
+        self.bus_speed = 30  # 公交速度（km/h）
+        self.beta_d = 0.15  # 单位距离成本（从 0.001 提高到 0.1，增加距离对成本的影响）
+        self.price_range = [0.0, 1.0]  # 价格范围（论文Section V.B）
+        self.time_slot_duration = 1.0  # 时间步时长（小时）
+        # 波动振幅
+        self.demand_fluctuation = 0.0  # 潜在需求波动振幅
+        # 波动频率
+        self.demand_frequency = 1.0  # 潜在需求波动频率
+        # poisson需求参数
+        self.demand_amplitude = 12  # 潜在需求泊松分布均值参数 
+
+        # --- 新增：PID 约束控制参数 ---
+        self.target_orr = 0.5       # 目标接单率约束 (例如要求达到 30%)
+        self.pid_kp = 1            # 比例系数 (Proportional)
+        self.pid_ki = 1           # 积分系数 (Integral) - 最关键，用于消除稳态误差
+        self.pid_kd = 0.5            # 微分系数 (Derivative)
+        
+        self.lambda_init = 4.0       # lambda 初始值
+        self.lambda_min = 0.0        # lambda 最小值 (非负)
+        self.lambda_max = 200000.0       # lambda 最大值 (防止数值爆炸)
+        self.pid_update_freq = 1     # PID 更新频率 (单位：Episode)
+
+        # SAC算法参数（论文Section IV.B）
+        self.gamma = 0.99  # 折扣因子
+        self.tau = 0.005  # 目标网络软更新系数
+        self.lr = 3e-4  # 学习率
+        self.alpha = 0.2  # 熵正则化系数
+        self.hidden_dim = 256  # 网络隐藏层维度
+        self.batch_size = 256  # 经验回放批次大小
+        self.memory_size = 100000  # 经验回放池容量
+
+        # 注意力机制参数（论文Section IV.C）
+        self.attention_heads = 4  # 多头注意力头数
+        self.attention_layers = 2  # 注意力层数
+        self.embedding_dim = 128  # 目的地嵌入维度
+
+        # 奖励函数参数（论文公式8）
+        self.lambda_or = 4.0  # ORR权重（论文敏感性分析最优值）
+
+        # 训练参数
+        self.episodes = 100  # 训练轮次
+        self.time_slots_per_episode = 24  # 每轮次时间步数（模拟1天）
+        self.target_entropy = -2 * self.num_destinations
+        # 收敛与早停参数
+        self.min_episodes = 180           # 最少训练轮次
+        self.max_episodes = 200         # 最多训练轮次（安全上限）
+        self.conv_window = 20            # 收敛检测滑动窗口大小K (从10增加到20，使判断更平滑)
+        self.conv_delta_ratio = 0.01     # 最近均值与前一均值的相对差阈值（1%）
+        self.conv_std_ratio = 0.05       # 最近窗口标准差占比阈值（5%）
+        self.eval_interval = 10          # 可选：评估打印间隔
