@@ -10,4 +10,9 @@ result/
 __pycache__/
 *.pyc
 
+busrouteplot.py
+plot.py
+uncertainplot.py
 
+# ignore pdf files
+*.pdf

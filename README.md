@@ -1,85 +1,89 @@
-# ST-SACA: Spatial-Temporal Attention-based Soft Actor-Critic for Bus Booking Systems
+# PID-SACA: PID-Controlled Constrained RL for Hub-based Joint Pricing, Dispatching, and Routing with Service Guarantees
 
-This repository contains the enhanced code implementation for the journal version (TMC) of the paper **"SACA: An End-to-End Method for Dispatching, Routing, and Pricing of Online Bus-Booking"**. 
+This repository provides a reference implementation of the paper **“PID-Controlled Constrained RL for Hub-based Joint Pricing, Dispatching, and Routing with Service Guarantees”**.
 
-Building upon the conference version (DASFAA), this implementation introduces a **Spatial-Temporal Attention-based State Representation (ST-SAC)** mechanism to significantly improve the agent's ability to capture demand distribution patterns and optimize long-term revenue.
+We study the problem of **joint pricing—dispatching/seat allocation—routing** in hub-based mobility-on-demand (Hub-based MoD) systems, and introduce a long-term service constraint, **Order Response Rate (ORR)**. Conventional Lagrangian dual updates can easily cause multiplier oscillations under high-variance environments, leading to unstable constraint satisfaction. To address this, we propose **PID-SACA**, which incorporates **PID control** into the Lagrangian multiplier update process to suppress oscillations and improve the stability of constraint satisfaction.
 
-## 1. Technique Improvement: ST-SAC
+> Note: The repository keeps several baselines for comparison (e.g., `SACA.py`, `SACA_baseline.py`, `GRC_ELG.py`, `JDRL_POMO.py`) as well as ablation/plotting scripts to facilitate experiment reproduction.
 
-In the original SACA (Baseline), the Actor network used a simple Multi-Layer Perceptron (MLP) to process the state vector. This approach treated each destination station as an independent feature, ignoring the geometric structure of the transportation network.
+## Key ideas (consistent with the paper)
 
-**The new ST-SAC (implemented in `SACA.py`) introduces:**
-*   **Spatial-Aware State Representation**: Explicitly models the spatial coordinates $(x, y)$ of each destination along with its real-time demand.
-*   **Self-Attention Mechanism**: Uses a Transformer-based attention layer to extract spatial dependencies between stations, allowing the agent to identify "hotspot clusters" dynamically.
-*   **Performance Gains**: Compared to the baseline, ST-SAC achieves **~33% higher average reward** and **~39.5% higher Order Response Rate (ORR)**.
+- Model the problem as a CMDP: maximize profit (revenue - cost) while satisfying the long-term ORR constraint $\mathbb{E}[ORR] \ge \delta$.
+- Use an entropy-regularized actor–critic (SAC) to handle continuous actions:
+	- Destination-level pricing vector $P\in[0,1]^K$
+	- Continuous weight vector related to seat allocation/dispatching $A\in[0,1]^K$ (re-normalized in the environment so that $\sum A = 1$)
+- Introduce an **execution-layer routing solver**: generate executable routes via an attention model during environment interaction, and return realized cost/distance as feedback.
+- Introduce **PID-Lagrangian**: update the dual variable (multiplier) $\nu$ with proportional/integral/derivative terms to stabilize constraint satisfaction.
 
-## 2. Project Structure
-
-The repository is organized as follows:
+## Code structure
 
 ```
 .
-├── SACA.py              # [Main] The proposed ST-SAC model with Spatial-Aware Actor
-├── SACA_baseline.py     # [Baseline] The original SAC model with MLP Actor
-├── compare_models.py       # [Script] Automates training of both models and generates comparison plots
-├── routing_model/          # Pre-trained Attention-based Routing Model (AM)
-│   ├── AM.py               # Attention Model architecture
-│   └── model/              # Saved weights for the routing model
-├── find_station/           # Station clustering scripts (DBSCAN, PAM)
-├── log/                    # [Output] Stores training logs (.csv) and result plots (.png)
-├── param/                  # [Output] Stores trained model parameters (.pth)
-└── README.md               # This file
+├── PID_SACA.py              # Core method: PID-controlled Lagrangian-SAC (recommended entry)
+├── SACA.py                  # Baseline: SACA variant with spatial-attention state representation (no PID constraint)
+├── SACA_baseline.py         # Baseline: original SACA baseline
+├── GRC_ELG.py               # Baseline: GRC-ELG
+├── JDRL_POMO.py             # Baseline: JDRL-POMO
+├── train.py                 # One-click training for multiple methods (run sequentially)
+├── CaseStudy.py             # Case study: pricing heatmap comparison under fixed demand
+├── ablation_*.py            # Ablation study scripts
+├── plot*.py                 # Plotting scripts (paper-style figures)
+├── routing_model/           # Routing module (attention model)
+│   ├── AM.py
+│   ├── gener_data.py
+│   └── model/               # Pretrained weights and normalization stats (for inference)
+├── find_station/            # Station clustering / preprocessing tools
+└── log/                     # Runtime logs, curves, and paper-figure exports (default output directory)
 ```
 
-## 3. Key Components
+## Environment and dependencies
 
-### 3.1 Environment (`BusBookingEnv`)
-*   **Dynamic Demand**: Simulates passenger demand using Poisson distribution with time-varying intensity.
-*   **Realistic Routing**: Integrates a pre-trained `AttentionRouteModel` to solve the Vehicle Routing Problem (VRP) for dispatched buses.
-*   **Cost Model**: Calculates operational costs based on real-world Haversine distance (`beta_d=0.1`).
+- Python: recommended $\ge 3.10$
+- Required dependencies: `numpy`, `scipy`, `matplotlib`, `torch`
 
-### 3.2 Spatial Actor (`SpatialActor`)
-*   **Input**: State vector + Station Coordinates.
-*   **Architecture**: `Input Embedding` -> `Self-Attention Layer` -> `Global Pooling` -> `Fusion with Bus State` -> `Policy Head`.
-*   **Output**: Continuous actions for Pricing ($P$) and Seat Allocation ($A$).
+This repository does not include `requirements.txt`. If you want to run it quickly, it is recommended to create an isolated virtual environment and install PyTorch (CUDA/CPU depends on your machine).
 
-## 4. Usage
+## Quick start
 
-### Prerequisites
-*   Python 3.8+
-*   PyTorch
-*   NumPy, Pandas, Matplotlib, Scipy
+### 1) Train PID-SACA (paper method)
 
-### Running the Models
+Run:
 
-**1. Train the Proposed ST-SAC Model:**
 ```bash
-python SACA.py
+python PID_SACA.py
 ```
-*   Results will be saved to `log/training_results_spatial_[timestamp].png` and `log/training_log_spatial_[timestamp].csv`.
-*   Model weights will be saved to `param/sac_bus_booking_spatial_[timestamp].pth`.
 
-**2. Train the Baseline Model:**
+During training, CSV logs will be saved under `log/` (e.g., `pid_saca_training_log_*.csv`).
+
+### 2) Train/compare multiple methods
+
+`train.py` will sequentially train multiple methods (JDRL-POMO, SACA, GRC-ELG, SACA_baseline) for reproduction and comparison:
+
 ```bash
-python SACA_baseline.py
+python train.py
 ```
 
-**3. Run Comparison Experiment:**
-To automatically train both models and generate a comparison plot:
+You can also modify `main(A=..., w=...)` in `train.py` to control the demand fluctuation amplitude and frequency.
+
+### 3) Case Study (pricing heatmaps)
+
+`CaseStudy.py` generates a pricing heatmap comparison under a fixed potential demand $N_p$.
+
 ```bash
-python compare_models.py
+python CaseStudy.py
 ```
-*   This will generate `log/comparison_result.png` showing the performance gap between ST-SAC and the Baseline.
 
-## 5. Performance Comparison
+## Data and reproducibility notes
 
-Recent experiments (100 episodes) show significant improvements:
+- Destination coordinates are from `find_station/stations_30/bus_stations.txt` (loaded by `routing_model/gener_data.py`).
+- The routing model weights are located at `routing_model/model/best_model.pth` and the normalization statistics `normalization_stats.pt`.
+- Environment demand is simulated using Poisson sampling (with optional sinusoidal fluctuations). Key hyperparameters are defined in the `Config` class of each method script.
 
-| Metric | Baseline (MLP) | **ST-SAC (Spatial)** | Improvement |
-| :--- | :--- | :--- | :--- |
-| **Avg Reward** | 42.08 | **55.97** | **+33.0%** |
-| **Revenue** | 41.48 | **55.12** | **+32.9%** |
-| **ORR** | 15.2% | **21.2%** | **+39.5%** |
-| **Cost** | 10.04 | 12.09	| +20.4% (Reasonably increasing) |
+## Common outputs
 
-*ST-SAC converges faster and learns a more efficient policy that balances high revenue with reasonable operational costs.*
+- `log/*.csv`: training metrics (reward / revenue / ORR / cost / distance / lambda, etc.)
+- `log/*.pdf`, `figure/**`: paper figures generated by plotting scripts
+
+## Citation
+
+If this repository is helpful to your research, please cite our paper (subject to the final public version).
