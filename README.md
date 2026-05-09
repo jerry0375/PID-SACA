@@ -107,4 +107,13 @@ For the LLM usage statement, see [docs/LLM_USAGE.md](./docs/LLM_USAGE.md).
 
 ## Citation
 
-If this repository is helpful to your research, please cite the final public version of the paper.
+If you find this code helpful in your research, please consider citing our paper:
+
+```bibtex
+@inproceedings{du2026pidsaca,
+  title={PID-Controlled Constrained RL for Hub-based Joint Pricing, Dispatching, and Routing with Service Guarantees},
+  author={Du, Pengfei and Gao, Yucen and Yang, Xiaochun and Wang, Bin},
+  booktitle={Proceedings of the International Joint Conference on Artificial Intelligence (IJCAI)},
+  year={2026}
+}
+```
