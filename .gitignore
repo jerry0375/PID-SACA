@@ -1,18 +1,28 @@
-# ignore log folder
+# Runtime outputs
 log/
+figure/
 
-# ignore temp, param and result files
+# Optional raw and intermediate data
+data/raw/
+data/preprocessing/
+
+# Temporary, parameter, and result files
 temp/
+legacy/
 param/
 result/
+results/
 
-# ignore python cache files
+# Python cache files
 __pycache__/
 *.pyc
+.ipynb_checkpoints/
 
-busrouteplot.py
-plot.py
-uncertainplot.py
+# Packaging and local environments
+build/
+dist/
+*.egg-info/
+.venv/
 
-# ignore pdf files
+# Drafts and generated documents
 *.pdf

@@ -1,95 +1,110 @@
-# PID-SACA: PID-Controlled Constrained RL for Hub-based Joint Pricing, Dispatching, and Routing with Service Guarantees
+# PID-SACA
 
-This repository provides a reference implementation of the paper **“PID-Controlled Constrained RL for Hub-based Joint Pricing, Dispatching, and Routing with Service Guarantees”**.
+Reference implementation for **PID-Controlled Constrained RL for Hub-based Joint Pricing, Dispatching, and Routing with Service Guarantees**.
 
-We study the problem of **joint pricing—dispatching/seat allocation—routing** in hub-based mobility-on-demand (Hub-based MoD) systems, and introduce a long-term service constraint, **Order Response Rate (ORR)**. Conventional Lagrangian dual updates can easily cause multiplier oscillations under high-variance environments, leading to unstable constraint satisfaction. To address this, we propose **PID-SACA**, which incorporates **PID control** into the Lagrangian multiplier update process to suppress oscillations and improve the stability of constraint satisfaction.
+PID-SACA studies hub-based mobility service control with three coupled decisions: destination-level pricing, seat allocation/dispatching, and route execution. The implementation models service quality through Order Response Rate (ORR) and uses a PID-controlled Lagrangian multiplier to stabilize constrained SAC training.
 
-> Note: The repository keeps several baselines for comparison (e.g., `SACA.py`, `SACA_baseline.py`, `GRC_ELG.py`, `JDRL_POMO.py`) as well as ablation/plotting scripts to facilitate experiment reproduction.
+This repository is organized as a paper-facing release: core methods live under `src/`, reproducibility entry points live under `experiments/`, and generated artifacts are ignored by git.
 
-## Key ideas (consistent with the paper)
+## Project Layout
 
-- Model the problem as a CMDP: maximize profit (revenue - cost) while satisfying the long-term ORR constraint $\mathbb{E}[ORR] \ge \delta$.
-- Use an entropy-regularized actor–critic (SAC) to handle continuous actions:
-	- Destination-level pricing vector $P\in[0,1]^K$
-	- Continuous weight vector related to seat allocation/dispatching $A\in[0,1]^K$ (re-normalized in the environment so that $\sum A = 1$)
-- Introduce an **execution-layer routing solver**: generate executable routes via an attention model during environment interaction, and return realized cost/distance as feedback.
-- Introduce **PID-Lagrangian**: update the dual variable (multiplier) $\nu$ with proportional/integral/derivative terms to stabilize constraint satisfaction.
+```text
+src/pid_saca/
+  algorithms/                  Main PID-SACA method and comparison baselines
+  routing/                     Attention routing model, data generator, and weights
+  paths.py                     Repository-relative path definitions
 
-## Code structure
-
-```
-.
-├── PID_SACA.py              # Core method: PID-controlled Lagrangian-SAC (recommended entry)
-├── SACA.py                  # Baseline: SACA variant with spatial-attention state representation (no PID constraint)
-├── SACA_baseline.py         # Baseline: original SACA baseline
-├── GRC_ELG.py               # Baseline: GRC-ELG
-├── JDRL_POMO.py             # Baseline: JDRL-POMO
-├── train.py                 # One-click training for multiple methods (run sequentially)
-├── CaseStudy.py             # Case study: pricing heatmap comparison under fixed demand
-├── ablation_*.py            # Ablation study scripts
-├── plot*.py                 # Plotting scripts (paper-style figures)
-├── routing_model/           # Routing module (attention model)
-│   ├── AM.py
-│   ├── gener_data.py
-│   └── model/               # Pretrained weights and normalization stats (for inference)
-├── find_station/            # Station clustering / preprocessing tools
-└── log/                     # Runtime logs, curves, and paper-figure exports (default output directory)
+experiments/                   Training, sensitivity, stability, and ablation entry points
+scripts/                       Lightweight command-line utilities
+preprocessing/                 Optional station-selection helpers for raw coordinate data
+data/stations_30/              Station coordinates used by the released experiments
+docs/                          Release notes and auxiliary documentation
+legacy/                        Ignored local scripts not used in the paper-facing release
 ```
 
-## Environment and dependencies
+Key released files:
 
-- Python: recommended $\ge 3.10$
-- Required dependencies: `numpy`, `scipy`, `matplotlib`, `torch`
+```text
+src/pid_saca/algorithms/pid_saca.py          PID-controlled Lagrangian SAC method
+src/pid_saca/algorithms/saca.py              Spatial-attention SAC baseline
+src/pid_saca/algorithms/saca_baseline.py     MLP-style SAC baseline
+src/pid_saca/algorithms/grc_elg.py           GRC-ELG-style experimental baseline
+src/pid_saca/algorithms/jdrl_pomo.py         JDRL-style PPO baseline
+src/pid_saca/routing/model/                  Shared attention-router weights and stats
+```
 
-This repository does not include `requirements.txt`. If you want to run it quickly, it is recommended to create an isolated virtual environment and install PyTorch (CUDA/CPU depends on your machine).
+## Environment
 
-## Quick start
+Recommended:
 
-### 1) Train PID-SACA (paper method)
+- Python 3.10+
+- PyTorch installed for your CUDA or CPU environment
 
-Run:
+Install the package and common dependencies:
 
 ```bash
-python PID_SACA.py
+pip install -e .
 ```
 
-During training, CSV logs will be saved under `log/` (e.g., `pid_saca_training_log_*.csv`).
-
-### 2) Train/compare multiple methods
-
-`train.py` will sequentially train multiple methods (JDRL-POMO, SACA, GRC-ELG, SACA_baseline) for reproduction and comparison:
+Optional preprocessing dependencies:
 
 ```bash
-python train.py
+pip install -r requirements-optional.txt
 ```
 
-You can also modify `main(A=..., w=...)` in `train.py` to control the demand fluctuation amplitude and frequency.
+## Quick Start
 
-### 3) Case Study (pricing heatmaps)
-
-`CaseStudy.py` generates a pricing heatmap comparison under a fixed potential demand $N_p$.
+Train PID-SACA:
 
 ```bash
-python CaseStudy.py
+python scripts/train_pid_saca.py
 ```
 
-## Data and reproducibility notes
+Run the main comparison baselines sequentially:
 
-- Destination coordinates are from `find_station/stations_30/bus_stations.txt` (loaded by `routing_model/gener_data.py`).
-- The routing model weights are located at `routing_model/model/best_model.pth` and the normalization statistics `normalization_stats.pt`.
-- Environment demand is simulated using Poisson sampling (with optional sinusoidal fluctuations). Key hyperparameters are defined in the `Config` class of each method script.
+```bash
+python experiments/train_all.py
+```
 
-## Common outputs
+Generate comparison plots from prepared logs:
 
-- `log/*.csv`: training metrics (reward / revenue / ORR / cost / distance / lambda, etc.)
-- `log/*.pdf`, `figure/**`: paper figures generated by plotting scripts
+```bash
+python scripts/plot_comparison.py
+```
 
-## Statement of LLM Usage
+Training logs are written under `log/` by default. Plotting helpers read logs from their configured folders and write figures under `figure/`. These folders are generated outputs and are ignored by git.
 
-In compliance with IJCAI-ECAI 2026 policies, we adhere to a transparent disclosure of Large Language Model (LLM) usage in this project. LLMs were utilized strictly as assistive tools for linguistic polishing and auxiliary coding tasks (e.g., visualization scripts). The core methodology, algorithm design, and experimental logic are original human contributions.
+## Experiments
 
-For a detailed breakdown of the usage scope and verification process, please refer to [LLM_USAGE.md](./LLM_USAGE.md).
+The released experiment entry points are:
+
+```text
+experiments/train_all.py                 Main baseline comparison launcher
+experiments/stability.py                 PID-vs-vanilla stability helper
+experiments/sensitivity_delta.py         Target-ORR sensitivity helper
+experiments/sensitivity_capacity.py      Capacity sensitivity helper
+experiments/ablation_saca_orr.py         ORR-related ablation variant
+experiments/ablation_wo_pricing.py       No-pricing ablation variant
+experiments/ablation_wo_route.py         No-route-feedback ablation variant
+experiments/summarize_ablation.py        Ablation log summarizer
+experiments/summarize_pid_ablation.py    PID ablation log summarizer
+```
+
+## Data And Weights
+
+- The released training configuration uses `data/stations_30/bus_stations.txt`.
+- Runtime route feedback uses `src/pid_saca/routing/model/best_model.pth` and `src/pid_saca/routing/model/normalization_stats.pt`.
+- Shared paths are centralized in `src/pid_saca/paths.py` so scripts can be launched from the repository root without relying on the old flat-file layout.
+- Raw ride-order data is not included. The preprocessing helpers are provided for users who have compatible coordinate data.
+
+## Release Scope
+
+The public release keeps paper-facing code in `src/`, `experiments/`, `scripts/`, `preprocessing/`, `data/`, and `docs/`. Local exploratory visualizations, old route-only prototypes, draft case-study scripts, temporary outputs, and generated figures/logs are excluded through `.gitignore`.
+
+## LLM Usage
+
+For the LLM usage statement, see [docs/LLM_USAGE.md](./docs/LLM_USAGE.md).
 
 ## Citation
 
-If this repository is helpful to your research, please cite our paper (subject to the final public version).
+If this repository is helpful to your research, please cite the final public version of the paper.
