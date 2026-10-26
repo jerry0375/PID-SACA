@@ -45,6 +45,8 @@ class Config:
         self.pid_kp = 1
         self.pid_ki = 1
         self.pid_kd = 0.5
+        self.pid_lr = 0.05
+        self.seed = 42
 
         self.lambda_init = 4.0
         self.lambda_min = 0.0
@@ -90,33 +92,33 @@ class PIDLagrangianController:
         self.kp = config.pid_kp
         self.ki = config.pid_ki
         self.kd = config.pid_kd
+        self.lr = getattr(config, "pid_lr", 0.05)
         self.target = config.target_orr
         self.min_val = config.lambda_min
         self.max_val = config.lambda_max
 
-        self.current_val = config.lambda_init
+        init_val = max(float(config.lambda_init), 1e-6)
+        self.log_val = math.log(init_val)
+        self.current_val = float(np.clip(math.exp(self.log_val), self.min_val, self.max_val))
         self.integral = 0.0
         self.prev_error = 0.0
 
     def update(self, current_orr):
         error = self.target - current_orr
 
-
         self.integral += error
-
-        self.integral = np.clip(self.integral, -50, 50)
-
+        self.integral = float(np.clip(self.integral, -50.0, 50.0))
 
         derivative = error - self.prev_error
 
+        delta_x = (self.kp * error) + (self.ki * self.integral) + (self.kd * derivative)
 
-        delta = (self.kp * error) + (self.ki * self.integral) + (self.kd * derivative)
-
-
-        self.current_val += delta
-
-
-        self.current_val = np.clip(self.current_val, self.min_val, self.max_val)
+        # Theorem 1 condition (4): |eta * delta_x| <= 1 via clipping, nu = exp(x)
+        step_x = float(np.clip(self.lr * delta_x, -1.0, 1.0))
+        max_log = math.log(max(self.max_val, 1.0))
+        min_log = math.log(max(self.min_val, 1e-6))
+        self.log_val = float(np.clip(self.log_val + step_x, min_log, max_log))
+        self.current_val = float(np.clip(math.exp(self.log_val), self.min_val, self.max_val))
 
         self.prev_error = error
 
@@ -133,9 +135,6 @@ class BusBookingEnv:
         self.reset()
 
     def init_destinations(self):
-        np.random.seed(42)
-
-
         self.dest_coords = np.array(gd.readbusstations(gd.config.FILE_PATH))
 
 
@@ -164,21 +163,19 @@ class BusBookingEnv:
 
     def demand_function(self, p_k):
         multiplier = (self.dist_max + self.dist_min - self.dist_k) / self.dist_max
-        F_pk = 1 - multiplier * (p_k ** 2)
-        F_pk = np.clip(F_pk, 0, 1)
-        return self.N_p * F_pk  # D_k^t = N_pk * F_pk
+        F_pk = 1.0 - multiplier * ((np.exp(p_k) - 1.0) / (math.e - 1.0))
+        F_pk = np.clip(F_pk, 0.0, 1.0)
+        return self.N_p * F_pk  # D_k^t = N_k^t * F_k^d(p_k^t, d_k)
 
     def supply_function(self, p_k, a_k):
-        self.N_s = sum([bus[1] for bus in self.buses.values()])
+        # Section 3.2: Total available capacity only counts idle buses (psi_i^t == 0)
+        self.N_s = sum([bus[1] for bus in self.buses.values() if bus[0] == 0.0])
         if self.N_s == 0:
             return np.zeros_like(p_k)
 
-        multiplier = (self.dist_max + self.dist_min - self.dist_k) / self.dist_max
-        F_sk = multiplier * (p_k ** 2)
-        F_sk = np.clip(F_sk, 0, 1)
-        return self.N_s * a_k * F_sk  # S_k^t
+        return self.N_s * a_k  # S_k^t = S_total^t * a_k^t
 
-    def calculate_reward(self, O_k, D_k, cost_total, dynamic_lambda=None):
+    def calculate_reward(self, O_k, N_p, cost_total, dynamic_lambda=None):
         lam = dynamic_lambda if dynamic_lambda is not None else self.config.lambda_or
 
 
@@ -187,7 +184,7 @@ class BusBookingEnv:
         R_t = revenue - cost_total
 
 
-        ORR_t = np.sum(O_k) / (np.sum(D_k) + 1e-6)
+        ORR_t = np.sum(O_k) / (np.sum(N_p) + 1e-6)
 
 
         total_reward = R_t + lam * ORR_t
@@ -199,7 +196,7 @@ class BusBookingEnv:
         a_k = np.clip(a_k, 0, 1)
         a_k = a_k / (np.sum(a_k) + 1e-6)
 
-
+        current_N_p = self.N_p.copy()
         D_k = self.demand_function(self.current_p)
         S_k = self.supply_function(self.current_p, a_k)
         O_k = np.minimum(D_k, S_k).astype(int)
@@ -207,8 +204,19 @@ class BusBookingEnv:
 
         if np.sum(O_k) == 0:
             self.update_bus_state({})
+            self.N_p = np.random.poisson(self.config.demand_amplitude + self.config.demand_fluctuation * np.sin(len(self.time_slots) * self.config.demand_frequency), self.config.num_destinations)
+            self.time_slots.append(len(self.time_slots) + 1)
+            done = len(self.time_slots) >= self.config.time_slots_per_episode
             next_state = self.get_state()
-            return next_state, 0.0, False, {"revenue": 0.0, "orr": 0.0, "cost": 0.0, "total_distance": 0.0}
+            return next_state, 0.0, done, {
+                "revenue": 0.0,
+                "orr": 0.0,
+                "orr_effective": 0.0,
+                "cost": 0.0,
+                "total_distance": 0.0,
+                "orders_accepted": 0,
+                "lambda": dynamic_lambda if dynamic_lambda is not None else self.config.lambda_or
+            }
 
 
         orders = []
@@ -217,6 +225,12 @@ class BusBookingEnv:
 
 
         bus_routes, bus_orders = self.dispatcher.dispatch(orders, self.buses)
+
+        # Reconcile fulfilled orders per destination with actual routed orders
+        fulfilled_O_k = np.zeros(self.config.num_destinations, dtype=int)
+        for assigned_list in bus_orders.values():
+            for dest_id in assigned_list:
+                fulfilled_O_k[dest_id] += 1
 
 
         cost_total = 0.0
@@ -228,11 +242,11 @@ class BusBookingEnv:
         self.update_bus_state(bus_routes)
 
 
+        reward, revenue, orr = self.calculate_reward(fulfilled_O_k, current_N_p, cost_total, dynamic_lambda)
+        orr_effective = np.sum(fulfilled_O_k) / (np.sum(D_k) + 1e-6)
+
         self.N_p = np.random.poisson(self.config.demand_amplitude + self.config.demand_fluctuation * np.sin(len(self.time_slots) * self.config.demand_frequency), self.config.num_destinations)
         self.time_slots.append(len(self.time_slots) + 1)
-
-
-        reward, revenue, orr = self.calculate_reward(O_k, D_k, cost_total, dynamic_lambda)
 
         next_state = self.get_state()
         done = len(self.time_slots) >= self.config.time_slots_per_episode
@@ -240,9 +254,11 @@ class BusBookingEnv:
         info = {
             "revenue": revenue,
             "orr": orr,
+            "orr_effective": orr_effective,
             "cost": cost_total,
             "total_distance": cost_total / self.config.beta_d,
-            "orders_accepted": np.sum(O_k),
+            "orders_accepted": int(np.sum(fulfilled_O_k)),
+            "orders_nominal": int(np.sum(O_k)),
             "lambda": dynamic_lambda if dynamic_lambda is not None else self.config.lambda_or
         }
         return next_state, reward, done, info
@@ -811,12 +827,15 @@ def evaluate_policy(agent, config, episodes=5):
     print(f"Evaluation summary over {episodes} episodes: {summary}")
     return summary
 
-def train_saca(config, run_name=None):
-    np.random.seed(42)
-    random.seed(42)
-    torch.manual_seed(42)
+def train_saca(config, run_name=None, seed=None):
+    seed_val = int(seed if seed is not None else getattr(config, "seed", 42))
+    np.random.seed(seed_val)
+    random.seed(seed_val)
+    torch.manual_seed(seed_val)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed_val)
     if torch.backends.mps.is_available():
-        torch.mps.manual_seed(42)
+        torch.mps.manual_seed(seed_val)
 
 
     print(f"Training on device: {device}")

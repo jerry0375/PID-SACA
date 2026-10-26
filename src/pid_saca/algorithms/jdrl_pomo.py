@@ -202,7 +202,6 @@ class BusBookingEnv:
         self.reset()
 
     def init_destinations(self):
-        np.random.seed(42)
         self.dest_coords = np.array(gd.readbusstations(gd.config.FILE_PATH))
         dep_lon = torch.full((self.config.num_destinations,), float(self.config.departure_station[0]), device=device)
         dep_lat = torch.full((self.config.num_destinations,), float(self.config.departure_station[1]), device=device)
@@ -227,18 +226,15 @@ class BusBookingEnv:
 
     def demand_function(self, p_k):
         multiplier = (self.dist_max + self.dist_min - self.dist_k) / self.dist_max
-        F_pk = 1 - multiplier * (p_k ** 2)
-        F_pk = np.clip(F_pk, 0, 1)
+        F_pk = 1.0 - multiplier * ((np.exp(p_k) - 1.0) / (math.e - 1.0))
+        F_pk = np.clip(F_pk, 0.0, 1.0)
         return self.N_p * F_pk
 
     def supply_function(self, p_k, a_k):
-        self.N_s = sum([bus[1] for bus in self.buses.values()])
+        self.N_s = sum([bus[1] for bus in self.buses.values() if bus[0] == 0.0])
         if self.N_s == 0:
             return np.zeros_like(p_k)
-        multiplier = (self.dist_max + self.dist_min - self.dist_k) / self.dist_max
-        F_sk = multiplier * (p_k ** 2)
-        F_sk = np.clip(F_sk, 0, 1)
-        return self.N_s * a_k * F_sk
+        return self.N_s * a_k
 
     def calculate_route_distance(self, route):
         if len(route) == 0: return 0.0
@@ -270,6 +266,7 @@ class BusBookingEnv:
         a_k = np.clip(a_k, 0, 1)
         a_k = a_k / (np.sum(a_k) + 1e-6)
 
+        current_N_p = self.N_p.copy()
         D_k = self.demand_function(self.current_p)
         S_k = self.supply_function(self.current_p, a_k)
         O_k = np.minimum(D_k, S_k).astype(int)
@@ -277,9 +274,12 @@ class BusBookingEnv:
 
         if np.sum(O_k) == 0:
             self.update_bus_state({})
+            self.N_p = np.random.poisson(self.config.demand_amplitude + self.config.demand_fluctuation * np.sin(len(self.time_slots) * self.config.demand_frequency), self.config.num_destinations)
+            self.time_slots.append(len(self.time_slots) + 1)
+            done = len(self.time_slots) >= self.config.time_slots_per_episode
             next_state = self.get_state()
             bus_rewards = np.zeros(self.num_buses)
-            return next_state, 0.0, bus_rewards, False, {"revenue": 0.0, "orr": 0.0, "cost": 0.0, "total_distance": 0.0}
+            return next_state, 0.0, bus_rewards, done, {"revenue": 0.0, "orr": 0.0, "orr_effective": 0.0, "cost": 0.0, "total_distance": 0.0, "orders_accepted": 0}
 
 
         orders = []
@@ -288,11 +288,16 @@ class BusBookingEnv:
 
         bus_routes, bus_orders = self.dispatcher.dispatch(orders, self.buses)
 
+        fulfilled_O_k = np.zeros(self.config.num_destinations, dtype=int)
+        for assigned_list in bus_orders.values():
+            for dest_id in assigned_list:
+                fulfilled_O_k[dest_id] += 1
+
 
         cost_total = 0.0
         bus_rewards = np.zeros(self.num_buses)
-        total_orders_accepted = np.sum(O_k)
-        total_demand = np.sum(D_k)
+        total_orders_accepted = np.sum(fulfilled_O_k)
+        total_potential_demand = np.sum(current_N_p)
 
         for bus_id, route in bus_routes.items():
             carried_orders = bus_orders.get(bus_id, [])
@@ -308,16 +313,17 @@ class BusBookingEnv:
                 orr_share = num_orders_this_bus / total_orders_accepted
             else:
                 orr_share = 0.0
-            global_orr = total_orders_accepted / (total_demand + 1e-6)
+            global_orr = total_orders_accepted / (total_potential_demand + 1e-6)
             orr_bonus = self.config.lambda_or * global_orr * orr_share
 
             bus_rewards[bus_id] = revenue_bus - cost_bus + orr_bonus
 
         self.update_bus_state(bus_routes)
 
-        revenue = np.sum(self.current_p * O_k)
+        revenue = np.sum(self.current_p * fulfilled_O_k)
         R_t = revenue - cost_total
-        ORR_t = np.sum(O_k) / (np.sum(D_k) + 1e-6)
+        ORR_t = np.sum(fulfilled_O_k) / (np.sum(current_N_p) + 1e-6)
+        orr_effective = np.sum(fulfilled_O_k) / (np.sum(D_k) + 1e-6)
 
         global_reward = R_t + self.config.lambda_or * ORR_t
 
@@ -331,9 +337,11 @@ class BusBookingEnv:
         info = {
             "revenue": revenue,
             "orr": ORR_t,
+            "orr_effective": orr_effective,
             "cost": cost_total,
             "total_distance": cost_total / self.config.beta_d,
-            "orders_accepted": np.sum(O_k)
+            "orders_accepted": int(np.sum(fulfilled_O_k)),
+            "orders_nominal": int(np.sum(O_k))
         }
         return next_state, global_reward, bus_rewards, done, info
 
