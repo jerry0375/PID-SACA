@@ -24,7 +24,7 @@ class Config:
 
 
     START_DAY = 1
-    END_DAY = 7
+    END_DAY = 30
 
 
     K_NEIGHBORS = 50
@@ -316,7 +316,7 @@ def read_data(file_path=None, startday=None, endday=None):
     data = []
     for day in range(startday, endday + 1):
 
-        filename = file_path / f"order_2016110{day}"
+        filename = file_path / f"order_201611{day:02d}"
         with open(filename, 'r') as file:
             for line in file:
                 fields = line.strip().split(',')

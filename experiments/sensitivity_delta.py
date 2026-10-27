@@ -54,7 +54,7 @@ def run_delta_experiments(config: DeltaTestConfig):
 
 
         try:
-            core.train_saca(train_cfg)
+            core.train_saca(train_cfg, run_name=f"delta_{delta:.2f}")
             print(f"    Experiment with delta={delta} completed successfully.")
         except Exception as e:
             print(f"    [Error] Experiment with delta={delta} failed: {e}")
@@ -74,21 +74,24 @@ def plot_delta_results(config: DeltaTestConfig):
     print("\n>>> Analyzing Delta Sensitivity Results...")
 
 
-    search_path = config.figure_dir / config.log_pattern
+    search_dir = config.figure_dir if config.figure_dir.exists() and list(config.figure_dir.glob(config.log_pattern)) else config.log_dir
+    search_path = search_dir / config.log_pattern
     files = glob.glob(str(search_path))
 
     num_deltas = len(config.delta_values)
 
-    if len(files) < num_deltas:
-        print(f"Warning: Expected {num_deltas} log files, but found {len(files)}")
-        print(f"Search path: {search_path}")
-        if len(files) == 0:
-            print("No files found. Please run experiments first or copy log files to figure/delta/")
-            return None
-
+    if len(files) == 0:
+        print(f"No files found at {search_path}. Please run experiments first or copy log files to figure/delta/")
+        return None
 
     files_sorted = sorted(files, key=os.path.getmtime)
-    latest_files = files_sorted[-num_deltas:]
+    latest_files = []
+    for idx, delta in enumerate(config.delta_values):
+        tagged = sorted(glob.glob(str(search_dir / f"pid_saca_training_log_delta_{delta:.2f}_*.csv")), key=os.path.getmtime)
+        if tagged:
+            latest_files.append(tagged[-1])
+        elif idx < len(files_sorted[-num_deltas:]):
+            latest_files.append(files_sorted[-num_deltas:][idx])
 
     print(f"Found {len(latest_files)} log files:")
     for f in latest_files:
@@ -140,6 +143,7 @@ def plot_delta_results(config: DeltaTestConfig):
 
     output_path = config.figure_dir / "delta_sensitivity_results.csv"
     config.figure_dir.mkdir(parents=True, exist_ok=True)
+    df_transposed.to_csv(output_path)
     print(f"\nResults saved to: {output_path}")
 
     return df_transposed

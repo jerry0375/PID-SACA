@@ -240,7 +240,7 @@ class BusBookingEnv:
 
             dis = self.calculate_route_distance(route)
             time_needed = dis / self.config.bus_speed
-            self.buses[bid][0] = time_needed
+            self.buses[bid][0] = max(0.0, time_needed - self.config.time_slot_duration)
             self.buses[bid][1] = self.config.bus_capacity
 
 

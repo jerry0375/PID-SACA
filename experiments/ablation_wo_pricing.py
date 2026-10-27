@@ -277,8 +277,8 @@ class BusBookingEnv:
                 assigned_bus = available_buses[i]
                 route_dist = self.calculate_route_distance(route)
                 travel_time = route_dist / self.config.bus_speed
-                self.buses[assigned_bus][0] = travel_time
-                self.buses[assigned_bus][1] = self.config.bus_capacity - len(route)
+                self.buses[assigned_bus][0] = max(0.0, travel_time - self.config.time_slot_duration)
+                self.buses[assigned_bus][1] = self.config.bus_capacity
 
 
 class SpatialActor(nn.Module):

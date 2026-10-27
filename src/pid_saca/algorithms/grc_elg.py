@@ -32,11 +32,11 @@ class Config:
         self.time_slot_duration = 1.0
 
         # Simulated demand parameters.
-        self.demand_fluctuation = 10.0
+        self.demand_fluctuation = 0.0
 
         self.demand_frequency = 1.0
 
-        self.demand_amplitude = 20
+        self.demand_amplitude = 12
 
 
         # Learning hyperparameters.
@@ -407,7 +407,7 @@ class BusBookingEnv:
             bid = available_buses[i]
             dis = self.calculate_route_distance(route)
             time_needed = dis / self.config.bus_speed
-            self.buses[bid][0] = time_needed
+            self.buses[bid][0] = max(0.0, time_needed - self.config.time_slot_duration)
             self.buses[bid][1] = self.config.bus_capacity
 
 
@@ -778,12 +778,13 @@ def evaluate_policy(agent, config, episodes=5):
     print(f"Evaluation summary over {episodes} episodes: {summary}")
     return summary
 
-def train_grc_elg(config, run_name="GRC_ELG"):
-    np.random.seed(42)
-    random.seed(42)
-    torch.manual_seed(42)
+def train_grc_elg(config, run_name="GRC_ELG", seed=None):
+    seed_val = int(seed if seed is not None else getattr(config, "seed", 42))
+    np.random.seed(seed_val)
+    random.seed(seed_val)
+    torch.manual_seed(seed_val)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(42)
+        torch.cuda.manual_seed_all(seed_val)
 
     print(f"Training GRC-ELG on device: {device}")
 

@@ -7,6 +7,9 @@ import os
 import _bootstrap  # noqa: F401
 from pid_saca.paths import FIGURE_DIR
 
+import matplotlib as mpl
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 
 plt.rcParams.update({
     'font.family': 'serif',
@@ -36,13 +39,13 @@ def plot_comparison():
         ("grc_elg_training_log_*.csv", "GRC-ELG", "#1F77B4", "-"),
 
 
-        ("saca_training_log_*.csv", "SACA", "#FF7F0E", "-"),
+        ("saca_training_log_*.csv", "ST-SACA", "#FF7F0E", "-"),
 
 
         ("jdrl_training_log_*.csv", "JDRL-POMO", "#2CA02C", "-"),
 
 
-        ("mlp_training_log_*.csv", "ST-SACA", "#7F7F7F", "--")
+        ("mlp_training_log_*.csv", "SACA", "#7F7F7F", "--")
     ]
 
     data_to_plot = []

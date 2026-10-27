@@ -4,11 +4,14 @@ import os
 import glob
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import pathlib
 import _bootstrap  # noqa: F401
 from pid_saca.algorithms import pid_saca as core
 from pid_saca.paths import FIGURE_DIR, REPO_ROOT
 
+mpl.rcParams["pdf.fonttype"] = 42
+mpl.rcParams["ps.fonttype"] = 42
 
 class ExpConfig:
 
@@ -66,7 +69,7 @@ def run_training(exp_config):
 
 
     print("="*50)
-    print("Starting Comparative Experiment: PID vs Vanilla")
+    print("Starting Comparative Experiment: PID vs Vanilla vs No Lagrangian")
     print("="*50)
 
 
@@ -85,7 +88,7 @@ def run_training(exp_config):
     cfg_vanilla.pid_update_freq = 1
 
 
-    core.train_saca(cfg_vanilla)
+    core.train_saca(cfg_vanilla, run_name="vanilla", seed=exp_config.seed)
 
 
     print("\n>>> Running Group B: PID Lagrangian (Ours)...")
@@ -101,7 +104,23 @@ def run_training(exp_config):
     cfg_pid.pid_kd = exp_config.pid_kd
     cfg_pid.pid_update_freq = 1
 
-    core.train_saca(cfg_pid)
+    core.train_saca(cfg_pid, run_name="pid", seed=exp_config.seed)
+
+
+    print("\n>>> Running Group C: No Lagrangian...")
+
+    cfg_no_lag = core.Config()
+    cfg_no_lag.episodes = exp_config.episodes
+    cfg_no_lag.max_episodes = exp_config.episodes
+    cfg_no_lag.target_orr = exp_config.target_orr
+    cfg_no_lag.lambda_init = 0.0
+    cfg_no_lag.lambda_max = 0.0
+    cfg_no_lag.pid_kp = 0.0
+    cfg_no_lag.pid_ki = 0.0
+    cfg_no_lag.pid_kd = 0.0
+    cfg_no_lag.pid_update_freq = 1
+
+    core.train_saca(cfg_no_lag, run_name="no_lag", seed=exp_config.seed)
 
     print("\nAll training sessions completed.")
 
@@ -109,6 +128,14 @@ def run_training(exp_config):
 def get_latest_three_log_files():
 
     log_dir = FIGURE_DIR / "pid"
+    if not log_dir.exists() or len(list(log_dir.glob("pid_saca_training_log_*.csv"))) < 3:
+        log_dir = REPO_ROOT / "log"
+    vanilla_files = sorted(glob.glob(str(log_dir / "pid_saca_training_log_vanilla_*.csv")), key=os.path.getmtime)
+    pid_files = sorted(glob.glob(str(log_dir / "pid_saca_training_log_pid_*.csv")), key=os.path.getmtime)
+    no_lag_files = sorted(glob.glob(str(log_dir / "pid_saca_training_log_no_lag_*.csv")), key=os.path.getmtime)
+    if vanilla_files and pid_files and no_lag_files:
+        return vanilla_files[-1], pid_files[-1], no_lag_files[-1]
+
     search_path = log_dir / "pid_saca_training_log_*.csv"
     files = glob.glob(str(search_path))
     if len(files) < 3:

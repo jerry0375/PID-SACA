@@ -258,7 +258,8 @@ class BusBookingEnv:
             if i >= len(available_buses): break
             bid = available_buses[i]
             dis = self.calculate_route_distance(route)
-            self.buses[bid][0] = dis / self.config.bus_speed
+            time_needed = dis / self.config.bus_speed
+            self.buses[bid][0] = max(0.0, time_needed - self.config.time_slot_duration)
             self.buses[bid][1] = self.config.bus_capacity
 
     def step(self, action):
@@ -551,12 +552,13 @@ def evaluate_policy(agent, config, episodes=5):
     print(f"Evaluation summary over {episodes} episodes: {summary}")
     return summary
 
-def train_jdrl(config, run_name=None):
-    np.random.seed(42)
-    random.seed(42)
-    torch.manual_seed(42)
+def train_jdrl(config, run_name=None, seed=None):
+    seed_val = int(seed if seed is not None else getattr(config, "seed", 42))
+    np.random.seed(seed_val)
+    random.seed(seed_val)
+    torch.manual_seed(seed_val)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(42)
+        torch.cuda.manual_seed_all(seed_val)
 
     print(f"Training JDRL on device: {device}")
 

@@ -64,7 +64,7 @@ class DemandParaTestConfig:
                 "pattern": "saca_training_log_*.csv"
             },
             {
-                "name": "SACA-MLP",
+                "name": "SACA",
                 "module": SACA_MLP,
                 "train_func": "train_saca",
                 "pattern": "mlp_training_log_*.csv"
@@ -113,7 +113,7 @@ def run_demand_experiments(config: DemandParaTestConfig):
                     train_cfg.min_episodes = config.episodes
 
 
-                train_func(train_cfg)
+                train_func(train_cfg, run_name=f"cap_{capacity}")
                 print(f"    {alg['name']} with capacity={capacity} completed successfully.")
 
             except Exception as e:
@@ -145,7 +145,8 @@ def plot_demand_results(config: DemandParaTestConfig):
     for alg in config.algorithms:
         alg_name = alg["name"]
         pattern = alg["pattern"]
-        search_path = config.figure_dir / pattern
+        search_dir = config.figure_dir if config.figure_dir.exists() and list(config.figure_dir.glob(pattern)) else config.log_dir
+        search_path = search_dir / pattern
         files = glob.glob(str(search_path))
 
         if len(files) < num_capacities:
@@ -157,7 +158,14 @@ def plot_demand_results(config: DemandParaTestConfig):
 
 
         files_sorted = sorted(files, key=os.path.getmtime)
-        latest_files = files_sorted[-num_capacities:]
+        latest_files = []
+        prefix = pattern.replace("*.csv", "")
+        for idx, capacity in enumerate(config.capacity_values):
+            tagged = sorted(glob.glob(str(search_dir / f"{prefix}cap_{capacity}_*.csv")), key=os.path.getmtime)
+            if tagged:
+                latest_files.append(tagged[-1])
+            elif idx < len(files_sorted[-num_capacities:]):
+                latest_files.append(files_sorted[-num_capacities:][idx])
 
         print(f"\n{alg_name}: Found {len(latest_files)} files")
 

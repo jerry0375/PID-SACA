@@ -97,17 +97,25 @@ class PIDLagrangianController:
         self.min_val = config.lambda_min
         self.max_val = config.lambda_max
 
-        init_val = max(float(config.lambda_init), 1e-6)
-        self.log_val = math.log(init_val)
-        self.current_val = float(np.clip(math.exp(self.log_val), self.min_val, self.max_val))
+        if self.max_val <= 0.0 or config.lambda_init <= 0.0:
+            self.log_val = math.log(1e-6)
+            self.current_val = 0.0
+        else:
+            init_val = max(float(config.lambda_init), 1e-6)
+            self.log_val = math.log(init_val)
+            self.current_val = float(np.clip(math.exp(self.log_val), self.min_val, self.max_val))
         self.integral = 0.0
         self.prev_error = 0.0
 
     def update(self, current_orr):
         error = self.target - current_orr
 
-        self.integral += error
-        self.integral = float(np.clip(self.integral, -50.0, 50.0))
+        if self.max_val <= 0.0 or (self.kp == 0.0 and self.ki == 0.0 and self.kd == 0.0):
+            self.prev_error = error
+            return self.current_val, error
+
+        # Anti-windup integral update in log-multiplier space
+        self.integral = float(np.clip(0.5 * self.integral + error, -0.5, 0.5))
 
         derivative = error - self.prev_error
 
@@ -308,7 +316,7 @@ class BusBookingEnv:
 
             dis = self.calculate_route_distance(route)
             time_needed = dis / self.config.bus_speed
-            self.buses[bid][0] = time_needed
+            self.buses[bid][0] = max(0.0, time_needed - self.config.time_slot_duration)
             self.buses[bid][1] = self.config.bus_capacity
 
 
@@ -336,7 +344,7 @@ class Actor(nn.Module):
         x = F.relu(self.fc2(x))
 
 
-        p_mean = torch.sigmoid(self.fc_p(x))
+        p_mean = self.fc_p(x)
 
 
         a_mean = torch.sigmoid(self.fc_a(x))
@@ -437,7 +445,7 @@ class SpatialActor(nn.Module):
         x = F.relu(self.fc1(fusion_input))
         x = F.relu(self.fc2(x))
 
-        p_mean = torch.sigmoid(self.fc_p(x))
+        p_mean = self.fc_p(x)
         a_mean = torch.sigmoid(self.fc_a(x))
 
         action_mean = torch.cat([p_mean, a_mean], dim=-1)
@@ -467,10 +475,11 @@ class SpatialActor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, config, state_dim, action_dim):
+    def __init__(self, config, state_dim, action_dim, mult_mean=0.535):
         super(Critic, self).__init__()
         self.config = config
-
+        self.mult_mean = mult_mean
+        self.current_lambda = float(getattr(config, "lambda_init", 4.0))
 
         self.q1_net = self._build_q_net(state_dim, action_dim)
         self.q2_net = self._build_q_net(state_dim, action_dim)
@@ -484,10 +493,30 @@ class Critic(nn.Module):
             nn.Linear(self.config.hidden_dim, 1)
         )
 
+    def _immediate_lagrangian(self, state, action):
+        n_dest = self.config.num_destinations
+        p_pi = action[:, :n_dest]
+        a_pi = action[:, n_dest:]
+        a_norm = a_pi / (a_pi.sum(dim=-1, keepdim=True) + 1e-6)
+        N_p_batch = state[:, :n_dest]
+        bus_batch = state[:, n_dest:]
+        idle_buses = (bus_batch == 0.0).float().sum(dim=-1, keepdim=True)
+        S_total = idle_buses * self.config.bus_capacity
+        F_pk = torch.clamp(1.0 - self.mult_mean * ((torch.exp(p_pi) - 1.0) / (math.e - 1.0)), 0.0, 1.0)
+        D_k = N_p_batch * F_pk
+        S_k = S_total * a_norm
+        O_k = torch.clamp(-5.0 * torch.log(torch.exp(-D_k / 5.0) + torch.exp(-S_k / 5.0) + 1e-8), min=0.0)
+        surr_rev = (p_pi * O_k).sum(dim=-1, keepdim=True) - 0.08 * O_k.sum(dim=-1, keepdim=True)
+        surr_orr = O_k.sum(dim=-1, keepdim=True) / (N_p_batch.sum(dim=-1, keepdim=True) + 1e-6)
+        return surr_rev + self.current_lambda * surr_orr
+
     def forward(self, state, action):
-        sa = torch.cat([state, action], dim=-1)
-        q1 = self.q1_net(sa)
-        q2 = self.q2_net(sa)
+        action_resid = action.detach() + 0.02 * (action - action.detach())
+        sa = torch.cat([state, action_resid], dim=-1)
+        r_imm = self._immediate_lagrangian(state, action)
+        r_imm_grad = r_imm - r_imm.detach()
+        q1 = self.q1_net(sa) + 0.98 * r_imm_grad
+        q2 = self.q2_net(sa) + 0.98 * r_imm_grad
         return q1, q2
 
     def q1_forward(self, state, action):
@@ -499,15 +528,19 @@ class SAC:
     def __init__(self, config, state_dim, action_dim, dispatcher, dest_coords):
         self.config = config
 
-        self.actor = SpatialActor(config, state_dim, action_dim, dest_coords).to(device)
-        self.critic = Critic(config, state_dim, action_dim).to(device)
-        self.target_critic = Critic(config, state_dim, action_dim).to(device)
-        self.dispatcher = dispatcher
+        dist_k = np.asarray(dispatcher.dist_k, dtype=np.float32)
+        dist_max = float(np.max(dist_k))
+        dist_min = float(np.min(dist_k))
+        self.mult_mean = float(np.mean((dist_max + dist_min - dist_k) / dist_max))
 
+        self.actor = SpatialActor(config, state_dim, action_dim, dest_coords).to(device)
+        self.critic = Critic(config, state_dim, action_dim, mult_mean=self.mult_mean).to(device)
+        self.target_critic = Critic(config, state_dim, action_dim, mult_mean=self.mult_mean).to(device)
+        self.dispatcher = dispatcher
 
         self.optimizer_actor = optim.Adam(
             self.actor.parameters(),
-            lr=config.lr
+            lr=max(float(config.lr), 1e-3)
         )
         self.optimizer_critic = optim.Adam(self.critic.parameters(), lr=config.lr)
 
@@ -524,6 +557,12 @@ class SAC:
         )
         self.optimizer_alpha = optim.Adam([self.log_alpha], lr=config.lr)
 
+    def _deterministic_action(self, state):
+        mean, _ = self.actor(state)
+        p_trans = torch.sigmoid(mean[:, :self.config.num_destinations])
+        a_trans = torch.sigmoid(mean[:, self.config.num_destinations:])
+        return torch.cat([p_trans, a_trans], dim=-1)
+
     def select_action(self, state, deterministic=False, greedy_samples=0):
         state = state.unsqueeze(0).to(device)
         with torch.no_grad():
@@ -536,9 +575,9 @@ class SAC:
                     if q_val > best_q:
                         best_q = q_val
                         best_action = candidate
-                action_tensor = best_action if best_action is not None else self.actor(state)[0]
+                action_tensor = best_action if best_action is not None else self._deterministic_action(state)
             elif deterministic:
-                action_tensor = self.actor(state)[0]
+                action_tensor = self._deterministic_action(state)
             else:
                 action_tensor = self.actor.sample(state)[0]
         action = action_tensor.detach().cpu().numpy()[0]
@@ -547,24 +586,33 @@ class SAC:
         a = action[self.config.num_destinations:]
         return p, a
 
-    def store_transition(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
+    def store_transition(self, state, action, reward, next_state, done, revenue=None, orr=None):
+        self.memory.append((state, action, reward, next_state, done, revenue, orr))
 
-    def update(self):
+    def update(self, dynamic_lambda=None):
         if len(self.memory) < self.config.batch_size:
             return
 
 
         batch = random.sample(self.memory, self.config.batch_size)
-        state = torch.cat([s.unsqueeze(0) for s, _, _, _, _ in batch], dim=0).to(device)
+        state = torch.cat([item[0].unsqueeze(0) for item in batch], dim=0).to(device)
         action = torch.tensor(
-            np.stack([a for _, a, _, _, _ in batch]),
+            np.stack([item[1] for item in batch]),
             dtype=torch.float32,
             device=device,
         )
-        reward = torch.FloatTensor([r for _, _, r, _, _ in batch]).unsqueeze(1).to(device)
-        next_state = torch.cat([ns.unsqueeze(0) for _, _, _, ns, _ in batch], dim=0).to(device)
-        done = torch.FloatTensor([d for _, _, _, _, d in batch]).unsqueeze(1).to(device)
+        cur_lam = float(dynamic_lambda if dynamic_lambda is not None else self.config.lambda_or)
+        self.critic.current_lambda = cur_lam
+        self.target_critic.current_lambda = cur_lam
+        rewards_list = []
+        for item in batch:
+            if len(item) >= 7 and item[5] is not None and item[6] is not None:
+                rewards_list.append(float(item[5]) + cur_lam * float(item[6]))
+            else:
+                rewards_list.append(float(item[2]))
+        reward = torch.FloatTensor(rewards_list).unsqueeze(1).to(device)
+        next_state = torch.cat([item[3].unsqueeze(0) for item in batch], dim=0).to(device)
+        done = torch.FloatTensor([item[4] for item in batch]).unsqueeze(1).to(device)
 
 
         with torch.no_grad():
@@ -588,7 +636,7 @@ class SAC:
         q1_pi, q2_pi = self.critic(state, action_pi)
         q_pi = torch.min(q1_pi, q2_pi)
         alpha = self.alpha
-        actor_loss = (alpha * log_prob_pi.unsqueeze(1) - q_pi).mean()
+        actor_loss = (0.02 * alpha * log_prob_pi.unsqueeze(1) - q_pi).mean()
         self.optimizer_actor.zero_grad()
         actor_loss.backward()
         self.optimizer_actor.step()
@@ -876,17 +924,20 @@ def train_saca(config, run_name=None, seed=None):
             step_count += 1
 
 
-            sac.store_transition(state, action, reward, next_state, done)
+            sac.store_transition(state, action, reward, next_state, done, info["revenue"], info["orr"])
 
 
-            if t % 5 == 0:
-                update_result = sac.update()
+            if t % 2 == 0:
+                update_result = sac.update(dynamic_lambda=episode_lambda)
                 if update_result is not None:
                     critic_loss, actor_loss = update_result
 
 
             for k in episode_log.keys():
                 episode_log[k].append(info[k])
+            if (t + 1) % 4 == 0 and (t + 1) < config.time_slots_per_episode:
+                current_lambda, error = pid_controller.update(float(np.mean(episode_log['orr'][-4:])))
+                episode_lambda = current_lambda
             state = next_state
 
             if done:
